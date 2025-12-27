@@ -1,120 +1,64 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional, Dict
 import json
 import os
-from datetime import datetime
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from fastapi.middleware.cors import CORSMiddleware
 
-JSON_FILE_PATH = "products.json"
-CART_FILE_PATH = "cart.json"
-USERS_FILE_PATH = "users.json"
-ORDERS_FILE_PATH = "orders.json"
+# --- Configuration and File I/O ---
+DATA_DIR = "data"
+BOOKS_FILE = os.path.join(DATA_DIR, "books.json")
+READERS_FILE = os.path.join(DATA_DIR, "readers.json")
 
-class Product(BaseModel):
-    id: int
-    name: str
-    description: str
-    category: str
-    price: float
-    imageUrl: str
+os.makedirs(DATA_DIR, exist_ok=True)  # Create data directory if it doesn't exist
 
-class CartItem(BaseModel):
-    productId: int
-    quantity: int
 
-class Cart(BaseModel):
-    userId: int
-    items: List[CartItem]
-
-class User(BaseModel):
-    id: int
-    name: str
-    email: str
-    birthDate: str
-    password: str
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-class LoginResponse(BaseModel):
-    success: bool
-    message: Optional[str] = None
-    user: Optional[Dict] = None
-
-class OrderItem(CartItem):
-    name: str
-    price: float
-    imageUrl: str
-
-class Order(BaseModel):
-    id: int
-    userId: int
-    items: List[OrderItem]
-    totalPrice: float
-    totalQuantity: int
-    orderDate: str
-    status: str = "Ожидание"
-
-class CheckoutResponse(BaseModel):
-    success: bool
-    message: Optional[str] = None
-    orderId: Optional[int] = None
-
-def load_json_file(filepath: str, default_data: List):
-    if not os.path.exists(filepath):
-        print(f"File {filepath} not found. Creating with default data.")
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(default_data, f, indent=4, ensure_ascii=False)
-        return default_data
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+def load_data(file_path):
+    """Load data from a JSON file."""
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except json.JSONDecodeError:
-        print(f"Error decoding {filepath}. Using default data.")
-        return default_data
-
-def save_json_file(filepath: str, data : List):
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
-
-def get_default_products():
-    return [
-        {
-            "id": 1,
-            "name": "MF DOOM - Mm..Food",
-            "description": "A classic hip-hop album featuring the iconic MF DOOM.",
-            "category": "Music",
-            "price": 12.99,
-            "imageUrl": "https://upload.wikimedia.org/wikipedia/en/3/3a/Mmfood.jpg"
-        },
-        {
-            "id": 2,
-            "name": "MF DOOM - Madvillainy",
-            "description": "Collaboration album with Madlib, considered one of the greatest hip-hop albums.",
-            "category": "Music",
-            "price": 14.99,
-            "imageUrl": "https://upload.wikimedia.org/wikipedia/en/6/65/Madvillain-madvillainy-album.jpg"
-        }
-    ]
-
-def get_default_users():
-    return [
-        {
-            "id": 1,
-            "name": "John Doe",
-            "email": "john@example.com",
-            "birthDate": "1990-01-01",
-            "password": "password123"
-        }
-    ]
-
-def get_default_orders():
     return []
 
-app = FastAPI(title="API Personal Stuff (Python)", version="1.0.0")
 
+def save_data(file_path, data):
+    """Save data to a JSON file."""
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+
+# --- Pydantic Models ---
+class Book(BaseModel):
+    book_code: str
+    author: str
+    title: str
+    publication_year: int
+    price: float
+    is_new: bool = False
+    annotation: str = ""
+
+
+class Reader(BaseModel):
+    reader_ticket_number: str
+    full_name: str
+    address: str
+    phone: str
+    borrowed_books: list = Field(default_factory=list)  # List of {book_code, borrow_date, return_date}
+
+
+class BorrowRequest(BaseModel):
+    book_code: str
+    borrow_date: str  # Format: YYYY-MM-DD
+    return_date: str  # Format: YYYY-MM-DD
+
+
+class ReturnRequest(BaseModel):
+    book_code: str
+
+
+# --- API Application Setup ---
+app = FastAPI(title="Simple Library API")
+
+# Configure CORS for WPF/Android clients (allows all origins for simplicity)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -123,192 +67,195 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/Products/GetAllProducts", response_model=List[Product])
-async def get_all_products():
-    products = load_json_file(JSON_FILE_PATH, get_default_products())
-    return products
 
-@app.get("/api/Products/GetProduct/{product_id}", response_model=Product)
-async def get_product(product_id: int):
-    products = load_json_file(JSON_FILE_PATH, get_default_products())
-    product = next((p for p in products if p["id"] == product_id), None)
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return Product(**product)
+# --- Helper Functions ---
+def _find_book_by_code(code: str):
+    books = load_data(BOOKS_FILE)
+    for book in books:
+        if book["book_code"] == code:
+            return book, books
+    return None, books
 
-@app.get("/api/Cart/GetCart/{user_id}", response_model=Cart)
-async def get_cart(user_id: int):
-    carts = load_json_file(CART_FILE_PATH, [])
-    user_cart = next((c for c in carts if c["userId"] == user_id), None)
-    if not user_cart:
-        return Cart(userId=user_id, items=[])
-    return Cart(**user_cart)
 
-@app.post("/api/Cart/AddToCart/{user_id}/{product_id}/{quantity}")
-async def add_to_cart(user_id: int, product_id: int, quantity: int):
-    if quantity <= 0:
-        raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
+def _find_reader_by_ticket(ticket: str):
+    readers = load_data(READERS_FILE)
+    for reader in readers:
+        if reader["reader_ticket_number"] == ticket:
+            return reader, readers
+    return None, readers
 
-    carts = load_json_file(CART_FILE_PATH, [])
-    user_cart = next((c for c in carts if c["userId"] == user_id), None)
 
-    if not user_cart:
-        user_cart = {"userId": user_id, "items": []}
-        carts.append(user_cart)
+# --- Book Endpoints ---
+@app.get("/books/")
+def get_all_books():
+    return load_data(BOOKS_FILE)
 
-    existing_item = next((i for i in user_cart["items"] if i["productId"] == product_id), None)
-    if existing_item:
-        existing_item["quantity"] += quantity
-    else:
-        user_cart["items"].append({"productId": product_id, "quantity": quantity})
 
-    save_json_file(CART_FILE_PATH, carts)
-    return {"message": "Item added to cart successfully", "cart": user_cart}
+@app.get("/books/{book_code}")
+def get_book(book_code: str):
+    book, _ = _find_book_by_code(book_code)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return book
 
-@app.put("/api/Cart/UpdateQuantity/{user_id}/{product_id}/{new_quantity}")
-async def update_quantity(user_id: int, product_id: int, new_quantity: int):
-    if new_quantity < 0:
-         raise HTTPException(status_code=400, detail="Quantity cannot be negative")
 
-    carts = load_json_file(CART_FILE_PATH, [])
-    user_cart = next((c for c in carts if c["userId"] == user_id), None)
+@app.post("/books/")
+def create_book(book: Book):
+    existing_book, books = _find_book_by_code(book.book_code)
+    if existing_book:
+        raise HTTPException(status_code=409, detail="Book with this code already exists")
+    books.append(book.dict())
+    save_data(BOOKS_FILE, books)
+    return book
 
-    if not user_cart:
-        raise HTTPException(status_code=404, detail="Cart not found for user")
 
-    existing_item = next((i for i in user_cart["items"] if i["productId"] == product_id), None)
-    if not existing_item:
-        raise HTTPException(status_code=404, detail="Item not found in cart")
+@app.put("/books/{book_code}")
+def update_book(book_code: str, updated_book: Book):
+    book, books = _find_book_by_code(book_code)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    # Ensure the book_code in the path matches the one in the request body
+    if updated_book.book_code != book_code:
+        raise HTTPException(status_code=400, detail="Book code in request body must match path parameter")
+    for i, b in enumerate(books):
+        if b["book_code"] == book_code:
+            books[i] = updated_book.dict()
+            break
+    save_data(BOOKS_FILE, books)
+    return updated_book
 
-    if new_quantity == 0:
-        user_cart["items"] = [i for i in user_cart["items"] if i["productId"] != product_id]
-    else:
-        existing_item["quantity"] = new_quantity
 
-    save_json_file(CART_FILE_PATH, carts)
-    return {"message": "Cart updated successfully", "cart": user_cart}
+@app.delete("/books/{book_code}")
+def delete_book(book_code: str):
+    book, books = _find_book_by_code(book_code)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
 
-@app.delete("/api/Cart/RemoveFromCart/{user_id}/{product_id}")
-async def remove_from_cart(user_id: int, product_id: int):
-    carts = load_json_file(CART_FILE_PATH, [])
-    user_cart = next((c for c in carts if c["userId"] == user_id), None)
+    # Check if any reader has borrowed this book
+    readers = load_data(READERS_FILE)
+    for reader in readers:
+        for borrowed_book in reader.get("borrowed_books", []):
+            if borrowed_book.get("book_code") == book_code:
+                raise HTTPException(status_code=409, detail="Cannot delete book, it is currently borrowed by a reader.")
 
-    if not user_cart:
-        raise HTTPException(status_code=404, detail="Cart not found for user")
+    books.remove(book)
+    save_data(BOOKS_FILE, books)
+    return {"message": f"Book {book_code} deleted successfully"}
 
-    original_length = len(user_cart["items"])
-    user_cart["items"] = [i for i in user_cart["items"] if i["productId"] != product_id]
 
-    if len(user_cart["items"]) == original_length:
-        raise HTTPException(status_code=404, detail="Item not found in cart")
+# --- Reader Endpoints ---
+@app.get("/readers/")
+def get_all_readers():
+    return load_data(READERS_FILE)
 
-    save_json_file(CART_FILE_PATH, carts)
-    return {"message": "Item removed from cart successfully", "cart": user_cart}
 
-@app.get("/api/Auth/Users", response_model=List[User])
-async def get_all_users():
-    users = load_json_file(USERS_FILE_PATH, get_default_users())
-    return [User(**u) for u in users]
+@app.get("/readers/{ticket_number}")
+def get_reader(ticket_number: str):
+    reader, _ = _find_reader_by_ticket(ticket_number)
+    if not reader:
+        raise HTTPException(status_code=404, detail="Reader not found")
+    return reader
 
-@app.post("/api/Auth/Register", response_model=LoginResponse)
-async def register(user_data: User):
-    users = load_json_file(USERS_FILE_PATH, get_default_users())
 
-    if any(u["email"] == user_data.email for u in users):
-        raise HTTPException(status_code=400, detail="User with this email already exists")
+@app.post("/readers/")
+def create_reader(reader: Reader):
+    existing_reader, readers = _find_reader_by_ticket(reader.reader_ticket_number)
+    if existing_reader:
+        raise HTTPException(status_code=409, detail="Reader with this ticket number already exists")
+    readers.append(reader.dict())
+    save_data(READERS_FILE, readers)
+    return reader
 
-    new_id = max([u["id"] for u in users], default=0) + 1
-    user_data.id = new_id
 
-    users.append(user_data.dict())
-    save_json_file(USERS_FILE_PATH, users)
+@app.put("/readers/{ticket_number}")
+def update_reader(ticket_number: str, updated_reader: Reader):
+    reader, readers = _find_reader_by_ticket(ticket_number)
+    if not reader:
+        raise HTTPException(status_code=404, detail="Reader not found")
+    # Ensure the ticket number in the path matches the one in the request body
+    if updated_reader.reader_ticket_number != ticket_number:
+        raise HTTPException(status_code=400, detail="Ticket number in request body must match path parameter")
+    for i, r in enumerate(readers):
+        if r["reader_ticket_number"] == ticket_number:
+            readers[i] = updated_reader.dict()
+            break
+    save_data(READERS_FILE, readers)
+    return updated_reader
 
-    return LoginResponse(
-        success=True,
-        message="Registration successful",
-        user={"id": user_data.id, "name": user_data.name, "email": user_data.email, "birthDate": user_data.birthDate}
-    )
 
-@app.post("/api/Auth/Login", response_model=LoginResponse)
-async def login(login_request: LoginRequest):
-    users = load_json_file(USERS_FILE_PATH, get_default_users())
+@app.delete("/readers/{ticket_number}")
+def delete_reader(ticket_number: str):
+    reader, readers = _find_reader_by_ticket(ticket_number)
+    if not reader:
+        raise HTTPException(status_code=404, detail="Reader not found")
+    # Check if reader has borrowed books
+    if reader.get("borrowed_books"):
+        raise HTTPException(status_code=409, detail="Cannot delete reader, they have borrowed books.")
+    readers.remove(reader)
+    save_data(READERS_FILE, readers)
+    return {"message": f"Reader {ticket_number} deleted successfully"}
 
-    user = next((u for u in users if u["email"] == login_request.email and u["password"] == login_request.password), None)
 
-    if not user:
-        raise HTTPException(status_code=400, detail="Invalid email or password")
+# --- Borrow/Return Endpoints ---
+@app.post("/readers/{ticket_number}/borrow")
+def borrow_book(ticket_number: str, request: BorrowRequest):
+    reader, readers = _find_reader_by_ticket(ticket_number)
+    if not reader:
+        raise HTTPException(status_code=404, detail="Reader not found")
 
-    return LoginResponse(
-        success=True,
-        message="Login successful",
-        user={"id": user["id"], "name": user["name"], "email": user["email"], "birthDate": user["birthDate"]}
-    )
+    book, _ = _find_book_by_code(request.book_code)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
 
-@app.post("/api/Orders/Checkout/{user_id}", response_model=CheckoutResponse)
-async def checkout(user_id: int):
-    carts = load_json_file(CART_FILE_PATH, [])
-    user_cart = next((c for c in carts if c["userId"] == user_id), None)
+    # Check if already borrowed
+    for borrowed_book in reader.get("borrowed_books", []):
+        if borrowed_book["book_code"] == request.book_code:
+            raise HTTPException(status_code=409, detail="Book is already borrowed by this reader")
 
-    if not user_cart or not user_cart["items"]:
-        raise HTTPException(status_code=400, detail="Cart is empty or does not exist for user")
+    reader["borrowed_books"].append(request.dict())
+    save_data(READERS_FILE, readers)
+    return {"message": f"Book {request.book_code} borrowed by {ticket_number}"}
 
-    products = load_json_file(JSON_FILE_PATH, get_default_products())
-    product_map = {p["id"]: p for p in products}
 
-    total_price = 0.0
-    total_quantity = 0
-    order_items = []
-    for cart_item in user_cart["items"]:
-        product_id = cart_item["productId"]
-        quantity = cart_item["quantity"]
-        product = product_map.get(product_id)
+@app.post("/readers/{ticket_number}/return")
+def return_book(ticket_number: str, request: ReturnRequest):
+    reader, readers = _find_reader_by_ticket(ticket_number)
+    if not reader:
+        raise HTTPException(status_code=404, detail="Reader not found")
 
-        if not product:
-            raise HTTPException(status_code=400, detail=f"Product with ID {product_id} not found.")
+    borrowed_books = reader.get("borrowed_books", [])
+    book_to_return_index = -1
+    for i, borrowed_book in enumerate(borrowed_books):
+        if borrowed_book["book_code"] == request.book_code:
+            book_to_return_index = i
+            break
 
-        item_total_price = product["price"] * quantity
-        total_price += item_total_price
-        total_quantity += quantity
+    if book_to_return_index == -1:
+        raise HTTPException(status_code=404, detail="This book is not currently borrowed by this reader.")
 
-        order_items.append(OrderItem(
-            productId=product_id,
-            quantity=quantity,
-            name=product["name"],
-            price=product["price"],
-            imageUrl=product["imageUrl"]
-        ))
+    borrowed_books.pop(book_to_return_index)
+    reader["borrowed_books"] = borrowed_books
+    save_data(READERS_FILE, readers)
+    return {"message": f"Book {request.book_code} returned by {ticket_number}"}
 
-    orders = load_json_file(ORDERS_FILE_PATH, get_default_orders())
-    new_order_id = max([o["id"] for o in orders], default=0) + 1
 
-    order = Order(
-        id=new_order_id,
-        userId=user_id,
-        items=order_items,
-        totalPrice=total_price,
-        totalQuantity=total_quantity,
-        orderDate=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
+@app.get("/readers/{ticket_number}/current_books")
+def get_current_books(ticket_number: str):
+    reader, _ = _find_reader_by_ticket(ticket_number)
+    if not reader:
+        raise HTTPException(status_code=404, detail="Reader not found")
+    return reader.get("borrowed_books", [])
 
-    orders.append(order.dict())
-    save_json_file(ORDERS_FILE_PATH, orders)
 
-    carts.remove(user_cart)
-    save_json_file(CART_FILE_PATH, carts)
+# --- Root Endpoint ---
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to the Simple Library API!"}
 
-    return CheckoutResponse(
-        success=True,
-        message="Order created successfully",
-        orderId=new_order_id
-    )
 
-@app.get("/api/Orders/GetUserOrders/{user_id}", response_model=List[Order])
-async def get_user_orders(user_id: int):
-    """Retrieve all orders for a specific user."""
-    orders = load_json_file(ORDERS_FILE_PATH, get_default_orders())
-    user_orders = [Order(**o) for o in orders if o["userId"] == user_id]
-    return user_orders
-
+# This block ensures the app runs only when the script is executed directly
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=5079)
+
+    # Run the application using uvicorn on localhost port 8000
+    uvicorn.run(app, host="127.0.0.1", port=8000)
